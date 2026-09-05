@@ -114,6 +114,9 @@ cd packet-guardian
 python -m venv venv          # if you don't already have one
 source venv/bin/activate
 python -m pip install -r requirements.txt
+
+# Optional, for linting/type-checking/coverage (also installs requirements.txt):
+python -m pip install -r requirements-dev.txt
 ```
 
 ## Usage
@@ -180,6 +183,31 @@ during training or hyperparameter selection) and (re)writes
 provenance, per-scenario precision/recall/FPR, ROC-AUC, and a confusion
 matrix. `tests/test_ml_quality.py` enforces hard minimum-quality gates
 against those same numbers.
+
+### Current measured performance
+
+Headline numbers from the currently-shipped model's last evaluation run
+(full breakdown, including per-scenario numbers and the methodology
+issues found and fixed while getting here, in
+[`EVALUATION.md`](EVALUATION.md)):
+
+| Metric | Value |
+|---|---|
+| False Positive Rate (aggregate) | 0.018 |
+| Recall, fast attacks (SYN/ICMP/UDP/SYN floods) | 1.000 |
+| Recall, slow SYN scan | 0.600 |
+| ROC-AUC | 0.957 |
+
+These numbers are **synthetic-data results** (see EVALUATION.md's
+Dataset Provenance section for why real public datasets weren't used)
+and will shift on retraining, since `python -m ml_engine.train` searches
+hyperparameters and model family fresh each run. Treat them as evidence
+the pipeline works as intended, not as a guarantee on real traffic.
+Slow-scan detection is intentionally weaker for the ML detector by
+design -- a single 5-second window sampled from an ongoing low-and-slow
+scan carries almost no signal; real slow-scan coverage comes from
+`core.rules.SlowSynScanRule`'s stateful long-window rule instead (see
+Detection Limits below).
 
 ## Detection Limits
 
@@ -263,6 +291,7 @@ Register it alongside the built-in rules in `main.py`:
 ```python
 self.ruleset = Ruleset([
     SynScanRule(window_seconds=window_seconds),
+    SlowSynScanRule(),
     IcmpFloodRule(window_seconds=window_seconds),
     PortKnockRule(window_seconds=window_seconds),
 ])
@@ -271,15 +300,27 @@ self.ruleset = Ruleset([
 ## Testing
 
 ```bash
-python -m pytest -q          # unit tests: rules, extractor, detector
-python -m compileall .        # syntax/import sanity check
-python main.py --pcap data/sample.pcap   # end-to-end integration check
+python -m pytest -q                          # full suite (includes the ML
+                                              #   quality gates -- trains
+                                              #   against whatever model.pkl
+                                              #   is currently on disk)
+python -m pytest --cov=core --cov=ml_engine --cov=ui --cov=main -q  # with coverage
+python -m compileall .                        # syntax/import sanity check
+ruff check .                                  # lint
+mypy core ui ml_engine main.py                # type check (application code only)
+python main.py --pcap data/sample.pcap        # end-to-end integration check
 ```
+
+`tests/test_ml_quality.py` loads and evaluates whatever model is
+currently at `ml_engine/model.pkl` -- run `python -m ml_engine.train`
+first if it isn't there yet (see Model Training above).
 
 `data/sample.pcap` is a synthetic capture containing normal TCP/UDP/ICMP
 traffic plus an embedded SYN scan and ICMP flood scenario, so a correct run
-of the integration check will show both a `SYN_SCAN` and an `ICMP_FLOOD`
-alert in the dashboard's alert panel.
+of the integration check will show a `SYN_SCAN`, `SLOW_SYN_SCAN` (the same
+fast scan also satisfies the slow rule's longer window -- both are
+expected to fire), and an `ICMP_FLOOD` alert in the dashboard's alert
+panel.
 
 ## Permission Requirements
 
