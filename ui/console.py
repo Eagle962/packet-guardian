@@ -61,7 +61,6 @@ class Dashboard:
         stats = self.stats
         table.add_row("Total Packets", str(stats.get("total_packets", 0)))
         table.add_row("Packets/sec", f"{stats.get('packets_per_second', 0.0):.2f}")
-        table.add_row("Bytes/sec", f"{stats.get('bytes_per_second', 0.0):.2f}")
         table.add_row("Avg Packet Size", f"{stats.get('average_packet_size', 0.0):.2f} bytes")
         table.add_row(
             "Protocol Ratios (TCP/UDP/ICMP)",
@@ -69,6 +68,8 @@ class Dashboard:
             f"{stats.get('udp_ratio', 0.0):.2f} / "
             f"{stats.get('icmp_ratio', 0.0):.2f}",
         )
+        table.add_row("SYN Ratio (of TCP)", f"{stats.get('syn_ratio', 0.0):.2f}")
+        table.add_row("Unique Source IPs", str(stats.get("unique_source_ip_count", 0)))
 
         ml_status = stats.get("ml_status", "NORMAL")
         if ml_status == "ANOMALY":

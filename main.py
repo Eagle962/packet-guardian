@@ -223,11 +223,12 @@ class Orchestrator:
         stats = {
             "total_packets": self.total_packets,
             "packets_per_second": feature_dict["packets_per_second"],
-            "bytes_per_second": feature_dict["bytes_per_second"],
             "average_packet_size": feature_dict["average_packet_size"],
             "tcp_ratio": feature_dict["tcp_ratio"],
             "udp_ratio": feature_dict["udp_ratio"],
             "icmp_ratio": feature_dict["icmp_ratio"],
+            "syn_ratio": feature_dict["syn_ratio"],
+            "unique_source_ip_count": int(feature_dict["unique_source_ip_count"]),
             "anomaly_score": ml_result["anomaly_score"],
             "ml_status": ml_result["status"],
             "has_traffic": has_traffic,
