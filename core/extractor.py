@@ -19,6 +19,7 @@ FEATURE_NAMES: List[str] = [
     "tcp_ratio",
     "udp_ratio",
     "icmp_ratio",
+    "other_ratio",
     "unique_destination_port_count",
     "unique_destination_ip_count",
 ]
@@ -61,6 +62,7 @@ def extract_features(packets: Sequence[Any], window_seconds: float = 5.0) -> np.
     tcp_count = 0
     udp_count = 0
     icmp_count = 0
+    other_count = 0
     dest_ports = set()
     dest_ips = set()
 
@@ -83,6 +85,17 @@ def extract_features(packets: Sequence[Any], window_seconds: float = 5.0) -> np.
             dest_ports.add(int(packet[UDP].dport))
         elif packet.haslayer(ICMP) or _is_icmpv6(packet):
             icmp_count += 1
+        else:
+            # ARP, IPv6 without a transport layer we track above (e.g.
+            # neighbor discovery not counted as ICMPv6 by _is_icmpv6 --
+            # it is, since ND messages subclass _ICMPv6, but this branch
+            # also catches genuinely unrecognized/malformed traffic), or
+            # any other non-TCP/UDP/ICMP protocol. Previously these
+            # packets vanished silently: they still counted toward
+            # packet_count and total_bytes but none of the ratio buckets,
+            # so tcp_ratio + udp_ratio + icmp_ratio could sum to less
+            # than 1 with no indication why.
+            other_count += 1
 
     average_packet_size = total_bytes / packet_count
     packets_per_second = packet_count / window_seconds
@@ -90,6 +103,7 @@ def extract_features(packets: Sequence[Any], window_seconds: float = 5.0) -> np.
     tcp_ratio = tcp_count / packet_count
     udp_ratio = udp_count / packet_count
     icmp_ratio = icmp_count / packet_count
+    other_ratio = other_count / packet_count
     unique_destination_port_count = len(dest_ports)
     unique_destination_ip_count = len(dest_ips)
 
@@ -101,6 +115,7 @@ def extract_features(packets: Sequence[Any], window_seconds: float = 5.0) -> np.
             tcp_ratio,
             udp_ratio,
             icmp_ratio,
+            other_ratio,
             unique_destination_port_count,
             unique_destination_ip_count,
         ],

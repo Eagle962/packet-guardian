@@ -2,7 +2,7 @@
 
 import numpy as np
 from scapy.layers.inet import ICMP, IP, TCP, UDP
-from scapy.layers.l2 import Ether
+from scapy.layers.l2 import ARP, Ether
 
 from core.extractor import FEATURE_NAMES, extract_features
 
@@ -28,6 +28,7 @@ class TestFeatureNames:
             "tcp_ratio",
             "udp_ratio",
             "icmp_ratio",
+            "other_ratio",
             "unique_destination_port_count",
             "unique_destination_ip_count",
         ]
@@ -57,6 +58,7 @@ class TestExtractFeatures:
         assert as_dict["tcp_ratio"] == 1.0
         assert as_dict["udp_ratio"] == 0.0
         assert as_dict["icmp_ratio"] == 0.0
+        assert as_dict["other_ratio"] == 0.0
         assert as_dict["unique_destination_port_count"] == 3
         assert as_dict["unique_destination_ip_count"] == 1
 
@@ -72,6 +74,7 @@ class TestExtractFeatures:
         assert as_dict["tcp_ratio"] == 0.5
         assert as_dict["udp_ratio"] == 0.25
         assert as_dict["icmp_ratio"] == 0.25
+        assert as_dict["other_ratio"] == 0.0
         assert as_dict["packets_per_second"] == 4 / 2.0
         assert as_dict["unique_destination_port_count"] == 3  # 80, 443, 53
 
@@ -82,6 +85,22 @@ class TestExtractFeatures:
         as_dict = dict(zip(FEATURE_NAMES, features))
         assert as_dict["unique_destination_ip_count"] == 0
         assert as_dict["unique_destination_port_count"] == 0
+        assert as_dict["other_ratio"] == 1.0
+
+    def test_non_tcp_udp_icmp_traffic_counted_as_other_not_dropped(self) -> None:
+        """Regression test: ARP (and any other non-TCP/UDP/ICMP protocol)
+        used to vanish from the ratio features entirely -- tcp_ratio +
+        udp_ratio + icmp_ratio summed to less than 1 with no accounting
+        for where the rest of the traffic went."""
+        packets = [make_tcp_packet() for _ in range(3)] + [Ether() / ARP() for _ in range(3)]
+        features = extract_features(packets, window_seconds=1.0)
+        as_dict = dict(zip(FEATURE_NAMES, features))
+        assert as_dict["tcp_ratio"] == 0.5
+        assert as_dict["other_ratio"] == 0.5
+        assert (
+            as_dict["tcp_ratio"] + as_dict["udp_ratio"] + as_dict["icmp_ratio"] + as_dict["other_ratio"]
+            == 1.0
+        )
 
     def test_unique_destination_counts(self) -> None:
         packets = [
