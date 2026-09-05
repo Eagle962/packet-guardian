@@ -16,7 +16,6 @@ from typing import Any, Deque, Dict, List, Optional
 from scapy.layers.inet import ICMP, IP, TCP
 from scapy.layers.inet6 import ICMPv6EchoRequest, IPv6
 
-
 Alert = Dict[str, Any]
 
 

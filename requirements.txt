@@ -3,3 +3,4 @@ scikit-learn==1.6.1
 numpy==2.0.2
 rich==15.0.0
 pytest==8.4.2
+joblib==1.5.3

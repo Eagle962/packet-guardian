@@ -213,8 +213,10 @@ class TestExtractFeatures:
         # distinction. Raw entropy keeps them apart.
         two_port = [make_tcp_packet(dport=p) for p in (80, 80, 443, 443)]
         many_port = [make_tcp_packet(dport=p) for p in range(1, 51)]
-        two_port_entropy = dict(zip(FEATURE_NAMES, extract_features(two_port, window_seconds=1.0)))["dest_port_entropy"]
-        many_port_entropy = dict(zip(FEATURE_NAMES, extract_features(many_port, window_seconds=1.0)))["dest_port_entropy"]
+        two_port_features = dict(zip(FEATURE_NAMES, extract_features(two_port, window_seconds=1.0)))
+        many_port_features = dict(zip(FEATURE_NAMES, extract_features(many_port, window_seconds=1.0)))
+        two_port_entropy = two_port_features["dest_port_entropy"]
+        many_port_entropy = many_port_features["dest_port_entropy"]
         assert two_port_entropy == pytest.approx(1.0)
         assert many_port_entropy > two_port_entropy * 3
 

@@ -13,6 +13,12 @@ actually been evaluated against real attack signal).
 Each profile is randomised (rates, sizes, host counts, jitter) via a
 caller-supplied random.Random, so many independent instances can be drawn
 from the same profile rather than one fixed canned sample.
+
+A handful of `pkt.time = t` assignments below carry a `# type: ignore
+[attr-defined]`: Scapy's `Packet.time` is a dynamic field set via its own
+descriptor magic, which mypy cannot see through for a freshly-constructed
+`IP(...) / TCP(...)`-style packet (as opposed to one that has passed
+through a helper returning a looser type).
 """
 
 from __future__ import annotations
@@ -239,7 +245,7 @@ def profile_fast_syn_scan(rng: random.Random, window_seconds: float) -> List[Any
     for i, port in enumerate(ports):
         t = start + (i / len(ports)) * burst_span
         pkt = IP(src=src, dst=dst) / TCP(sport=rng.randint(1024, 65535), dport=port, flags="S")
-        pkt.time = t
+        pkt.time = t  # type: ignore[attr-defined]
         packets.append(pkt)
     return packets
 
@@ -258,7 +264,7 @@ def profile_slow_syn_scan(rng: random.Random, window_seconds: float) -> List[Any
     for t in _timestamps(rng, count, window_seconds):
         port = rng.randint(1, 65535)
         pkt = IP(src=src, dst=dst) / TCP(sport=rng.randint(1024, 65535), dport=port, flags="S")
-        pkt.time = t
+        pkt.time = t  # type: ignore[attr-defined]
         packets.append(pkt)
     return packets
 
@@ -277,7 +283,7 @@ def profile_port_sweep(rng: random.Random, window_seconds: float) -> List[Any]:
     for i, host in enumerate(hosts):
         t = start + (i / len(hosts)) * burst_span
         pkt = IP(src=src, dst=host) / TCP(sport=rng.randint(1024, 65535), dport=port, flags="S")
-        pkt.time = t
+        pkt.time = t  # type: ignore[attr-defined]
         packets.append(pkt)
     return packets
 
@@ -290,7 +296,7 @@ def profile_icmp_flood(rng: random.Random, window_seconds: float) -> List[Any]:
     packets = []
     for t in _timestamps(rng, count, window_seconds, jitter_frac=0.02):
         pkt = IP(src=src, dst=dst) / ICMP(type=8)
-        pkt.time = t
+        pkt.time = t  # type: ignore[attr-defined]
         packets.append(pkt)
     return packets
 
@@ -323,7 +329,7 @@ def profile_syn_flood_single_port(rng: random.Random, window_seconds: float) -> 
     for t in _timestamps(rng, count, window_seconds, jitter_frac=0.02):
         src = _rand_ip(rng, "192.168.")
         pkt = IP(src=src, dst=dst) / TCP(sport=rng.randint(1024, 65535), dport=port, flags="S")
-        pkt.time = t
+        pkt.time = t  # type: ignore[attr-defined]
         packets.append(pkt)
     return packets
 

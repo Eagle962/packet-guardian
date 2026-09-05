@@ -99,7 +99,9 @@ def load_train_val_data():
     return X_train_all, X_train_fit, X_val, y_val, scenarios_val_combined
 
 
-def _validation_metrics(pipeline: Pipeline, X_val: np.ndarray, y_val: np.ndarray, scenarios_val: List[str]) -> Dict[str, Any]:
+def _validation_metrics(
+    pipeline: Pipeline, X_val: np.ndarray, y_val: np.ndarray, scenarios_val: List[str]
+) -> Dict[str, Any]:
     preds = pipeline.predict(X_val)  # 1 = normal, -1 = anomaly
     is_normal = y_val == 1
     is_attack = y_val == -1
@@ -128,7 +130,9 @@ def _selection_score(metrics: Dict[str, Any], fpr_budget: float = VALIDATION_FPR
     return recall - 10.0 * (fpr - fpr_budget)
 
 
-def _search_isolation_forest(X_fit: np.ndarray, X_val: np.ndarray, y_val: np.ndarray, scenarios_val: List[str]) -> List[Dict[str, Any]]:
+def _search_isolation_forest(
+    X_fit: np.ndarray, X_val: np.ndarray, y_val: np.ndarray, scenarios_val: List[str]
+) -> List[Dict[str, Any]]:
     candidates = []
     grid = itertools.product([0.01, 0.05, 0.1], [100, 200], ["auto", 0.5])
     for contamination, n_estimators, max_samples in grid:
@@ -149,7 +153,9 @@ def _search_isolation_forest(X_fit: np.ndarray, X_val: np.ndarray, y_val: np.nda
     return candidates
 
 
-def _search_one_class_svm(X_fit: np.ndarray, X_val: np.ndarray, y_val: np.ndarray, scenarios_val: List[str]) -> List[Dict[str, Any]]:
+def _search_one_class_svm(
+    X_fit: np.ndarray, X_val: np.ndarray, y_val: np.ndarray, scenarios_val: List[str]
+) -> List[Dict[str, Any]]:
     candidates = []
     grid = itertools.product([0.01, 0.05, 0.1], ["scale", "auto"])
     for nu, gamma in grid:
@@ -170,7 +176,9 @@ def _search_one_class_svm(X_fit: np.ndarray, X_val: np.ndarray, y_val: np.ndarra
     return candidates
 
 
-def _search_lof(X_fit: np.ndarray, X_val: np.ndarray, y_val: np.ndarray, scenarios_val: List[str]) -> List[Dict[str, Any]]:
+def _search_lof(
+    X_fit: np.ndarray, X_val: np.ndarray, y_val: np.ndarray, scenarios_val: List[str]
+) -> List[Dict[str, Any]]:
     candidates = []
     grid = itertools.product([10, 20, 35], [0.05, 0.1])
     for n_neighbors, contamination in grid:
@@ -191,7 +199,9 @@ def _search_lof(X_fit: np.ndarray, X_val: np.ndarray, y_val: np.ndarray, scenari
     return candidates
 
 
-def select_best_model(X_fit: np.ndarray, X_val: np.ndarray, y_val: np.ndarray, scenarios_val: List[str]) -> List[Dict[str, Any]]:
+def select_best_model(
+    X_fit: np.ndarray, X_val: np.ndarray, y_val: np.ndarray, scenarios_val: List[str]
+) -> List[Dict[str, Any]]:
     """Search all three candidate families and return every candidate,
     sorted best-first by validation score. candidates[0] is the winner."""
     candidates = (

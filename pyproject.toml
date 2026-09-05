@@ -1,0 +1,18 @@
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+# A focused, practical rule set (pycodestyle errors/warnings, pyflakes,
+# import sorting) rather than ruff's full "ALL" surface: pyupgrade (UP)
+# rules like preferring `X | None` over `Optional[X]` are stylistic
+# modernizations this project doesn't need (it targets Python 3.9 and
+# already uses `from __future__ import annotations` where that matters),
+# and preview/opinionated rules (flake8-datetimez, flake8-blind-except,
+# etc.) flag deliberate, already-justified-in-comments choices rather
+# than real bugs.
+select = ["E", "F", "W", "I"]
+
+[tool.mypy]
+ignore_missing_imports = true
+python_version = "3.9"

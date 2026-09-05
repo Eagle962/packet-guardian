@@ -9,6 +9,7 @@ gate for the rule engine and TUI.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, List, Tuple
 
 from scapy.layers.inet import ICMP, IP, TCP, UDP
 from scapy.utils import wrpcap
@@ -25,18 +26,21 @@ def _timed(packet, timestamp: float):
     return packet
 
 
-def _build_normal_traffic(start: float) -> list:
+def _build_normal_traffic(start: float) -> Tuple[List[Any], float]:
     packets = []
     t = start
 
     # A handful of normal TCP handshakes to a couple of common ports.
     for port in (80, 443):
         for client_ip in ("10.0.0.10", "10.0.0.11"):
-            packets.append(_timed(IP(src=client_ip, dst="10.0.0.1") / TCP(sport=40000 + port, dport=port, flags="S"), t))
+            syn = IP(src=client_ip, dst="10.0.0.1") / TCP(sport=40000 + port, dport=port, flags="S")
+            packets.append(_timed(syn, t))
             t += 0.05
-            packets.append(_timed(IP(src="10.0.0.1", dst=client_ip) / TCP(sport=port, dport=40000 + port, flags="SA"), t))
+            syn_ack = IP(src="10.0.0.1", dst=client_ip) / TCP(sport=port, dport=40000 + port, flags="SA")
+            packets.append(_timed(syn_ack, t))
             t += 0.05
-            packets.append(_timed(IP(src=client_ip, dst="10.0.0.1") / TCP(sport=40000 + port, dport=port, flags="A"), t))
+            ack = IP(src=client_ip, dst="10.0.0.1") / TCP(sport=40000 + port, dport=port, flags="A")
+            packets.append(_timed(ack, t))
             t += 1.0
 
     # Normal DNS-like UDP traffic.
@@ -54,7 +58,9 @@ def _build_normal_traffic(start: float) -> list:
     return packets, t
 
 
-def _build_syn_scan(start: float, attacker_ip: str = "10.0.0.66", victim_ip: str = "10.0.0.1") -> list:
+def _build_syn_scan(
+    start: float, attacker_ip: str = "10.0.0.66", victim_ip: str = "10.0.0.1"
+) -> Tuple[List[Any], float]:
     packets = []
     t = start
     for port in range(1, 31):
@@ -63,7 +69,9 @@ def _build_syn_scan(start: float, attacker_ip: str = "10.0.0.66", victim_ip: str
     return packets, t
 
 
-def _build_icmp_flood(start: float, attacker_ip: str = "10.0.0.77", victim_ip: str = "10.0.0.1") -> list:
+def _build_icmp_flood(
+    start: float, attacker_ip: str = "10.0.0.77", victim_ip: str = "10.0.0.1"
+) -> Tuple[List[Any], float]:
     packets = []
     t = start
     for _ in range(150):

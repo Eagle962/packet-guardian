@@ -13,11 +13,11 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import numpy as np
-from sklearn.metrics import confusion_matrix, f1_score, precision_score, recall_score, roc_auc_score
+from sklearn.metrics import confusion_matrix, f1_score, precision_score, roc_auc_score
 
 from ml_engine.detector import load_model, predict
+from ml_engine.traffic_profiles import ALL_PROFILES, NORMAL_PROFILES, build_feature_dataset
 from ml_engine.train import N_EVAL_PER_PROFILE, SEED_EVAL, WINDOW_SECONDS
-from ml_engine.traffic_profiles import ALL_PROFILES, ATTACK_PROFILES, NORMAL_PROFILES, build_feature_dataset
 
 EVALUATION_MD_PATH = Path(__file__).parent.parent / "EVALUATION.md"
 
@@ -31,7 +31,9 @@ def build_eval_set():
     return X, y_true, np.array(scenarios)
 
 
-def evaluate_model(model_artifact: Dict[str, Any], X: np.ndarray, y_true: np.ndarray, scenarios: np.ndarray) -> Dict[str, Any]:
+def evaluate_model(
+    model_artifact: Dict[str, Any], X: np.ndarray, y_true: np.ndarray, scenarios: np.ndarray
+) -> Dict[str, Any]:
     n = X.shape[0]
     y_pred = np.zeros(n, dtype=int)
     scores = np.zeros(n, dtype=float)
@@ -81,7 +83,9 @@ def evaluate_model(model_artifact: Dict[str, Any], X: np.ndarray, y_true: np.nda
     }
 
 
-def _write_evaluation_md(model_artifact: Dict[str, Any], metrics: Dict[str, Any], path: Path = EVALUATION_MD_PATH) -> None:
+def _write_evaluation_md(
+    model_artifact: Dict[str, Any], metrics: Dict[str, Any], path: Path = EVALUATION_MD_PATH
+) -> None:
     lines: List[str] = []
     lines.append("# ML Detector Evaluation\n")
     lines.append(
@@ -124,15 +128,27 @@ def _write_evaluation_md(model_artifact: Dict[str, Any], metrics: Dict[str, Any]
     lines.append("\n### Splits and seeds\n")
     lines.append("| Split | Seed | Windows/profile | Purpose |")
     lines.append("|---|---|---|---|")
-    lines.append(f"| Train | {provenance.get('seed_train')} | {provenance.get('n_train_per_profile')} | Fit the model (normal-only) |")
-    lines.append(f"| Validation | {provenance.get('seed_val')} | {provenance.get('n_val_per_profile')} | Hyperparameter/model-family selection |")
-    lines.append(f"| Evaluation (held out) | {SEED_EVAL} | {N_EVAL_PER_PROFILE} | This report -- never touched during training/tuning |")
+    lines.append(
+        f"| Train | {provenance.get('seed_train')} | {provenance.get('n_train_per_profile')} | "
+        f"Fit the model (normal-only) |"
+    )
+    lines.append(
+        f"| Validation | {provenance.get('seed_val')} | {provenance.get('n_val_per_profile')} | "
+        f"Hyperparameter/model-family selection |"
+    )
+    lines.append(
+        f"| Evaluation (held out) | {SEED_EVAL} | {N_EVAL_PER_PROFILE} | "
+        f"This report -- never touched during training/tuning |"
+    )
     lines.append(f"\nWindow size: {provenance.get('window_seconds')}s.\n")
 
     lines.append("## Model\n")
     lines.append(f"- **Family**: {model_artifact.get('model_family')}")
     lines.append(f"- **Hyperparameters**: `{model_artifact.get('hyperparameters')}`")
-    lines.append(f"- **Preprocessing**: log1p on heavy-tailed count/rate features, then RobustScaler (see ml_engine/preprocessing.py)")
+    lines.append(
+        "- **Preprocessing**: log1p on heavy-tailed count/rate features, then RobustScaler "
+        "(see ml_engine/preprocessing.py)"
+    )
     lines.append(f"- **Validation metrics at selection time**: `{model_artifact.get('validation_metrics')}`\n")
 
     lines.append("## Held-out evaluation results\n")
@@ -148,7 +164,7 @@ def _write_evaluation_md(model_artifact: Dict[str, Any], metrics: Dict[str, Any]
     cm = metrics["confusion_matrix"]
     lines.append("\n**Confusion matrix** (rows = true, cols = predicted; order [normal, attack]):\n")
     lines.append("```")
-    lines.append(f"              pred_normal  pred_attack")
+    lines.append("              pred_normal  pred_attack")
     lines.append(f"true_normal   {cm[0][0]:>11}  {cm[0][1]:>11}")
     lines.append(f"true_attack   {cm[1][0]:>11}  {cm[1][1]:>11}")
     lines.append("```\n")
