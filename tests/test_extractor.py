@@ -1,12 +1,14 @@
 """Tests for core.extractor.extract_features."""
 
+import math
+
 import numpy as np
 import pytest
 from scapy.layers.inet import ICMP, IP, TCP, UDP
 from scapy.layers.inet6 import ICMPv6EchoRequest, IPv6
 from scapy.layers.l2 import ARP, Ether
 
-from core.extractor import FEATURE_NAMES, _shannon_entropy_normalized, extract_features
+from core.extractor import FEATURE_NAMES, _shannon_entropy, extract_features
 
 
 def make_tcp_packet(src: str = "10.0.0.1", dst: str = "10.0.0.2", dport: int = 80, flags: str = "S", timestamp=None):
@@ -55,19 +57,32 @@ class TestFeatureNames:
         assert "bytes_per_second" not in FEATURE_NAMES
 
 
-class TestShannonEntropyNormalized:
+class TestShannonEntropy:
+    """Deliberately unnormalized (raw bits), not divided by log2(k) --
+    see _shannon_entropy's docstring for why: normalizing would make "2
+    values evenly split" and "50 values evenly split" both read as ~1.0,
+    erasing exactly the distinction that separates normal traffic
+    (typically 1-2 destination ports) from a port scan (many)."""
+
     def test_single_value_is_zero_entropy(self) -> None:
-        assert _shannon_entropy_normalized([10]) == 0.0
+        assert _shannon_entropy([10]) == 0.0
 
-    def test_uniform_distribution_is_max_entropy(self) -> None:
-        assert _shannon_entropy_normalized([5, 5, 5, 5]) == pytest.approx(1.0)
+    def test_two_values_evenly_split_caps_at_one_bit(self) -> None:
+        assert _shannon_entropy([5, 5]) == pytest.approx(1.0)
 
-    def test_skewed_distribution_is_between(self) -> None:
-        entropy = _shannon_entropy_normalized([100, 1, 1, 1])
-        assert 0.0 < entropy < 1.0
+    def test_more_distinct_values_gives_more_entropy_at_same_balance(self) -> None:
+        two_way = _shannon_entropy([5, 5])
+        fifty_way = _shannon_entropy([1] * 50)
+        assert fifty_way > two_way
+        assert fifty_way == pytest.approx(math.log2(50))
+
+    def test_skewed_distribution_is_lower_than_balanced(self) -> None:
+        skewed = _shannon_entropy([100, 1, 1, 1])
+        balanced = _shannon_entropy([1, 1, 1, 1])
+        assert 0.0 < skewed < balanced
 
     def test_empty_is_zero(self) -> None:
-        assert _shannon_entropy_normalized([]) == 0.0
+        assert _shannon_entropy([]) == 0.0
 
 
 class TestExtractFeatures:
@@ -189,7 +204,19 @@ class TestExtractFeatures:
         packets = [make_tcp_packet(dport=p) for p in range(1, 21)]
         features = extract_features(packets, window_seconds=5.0)
         as_dict = dict(zip(FEATURE_NAMES, features))
-        assert as_dict["dest_port_entropy"] == pytest.approx(1.0)
+        assert as_dict["dest_port_entropy"] == pytest.approx(math.log2(20))
+
+    def test_dest_port_entropy_distinguishes_few_from_many_ports_at_same_balance(self) -> None:
+        # Regression test: normalizing entropy by log2(k) made "evenly
+        # split across 2 ports" (typical web browsing: 80/443) and "evenly
+        # split across 50 ports" (a scan) both read as ~1.0, erasing the
+        # distinction. Raw entropy keeps them apart.
+        two_port = [make_tcp_packet(dport=p) for p in (80, 80, 443, 443)]
+        many_port = [make_tcp_packet(dport=p) for p in range(1, 51)]
+        two_port_entropy = dict(zip(FEATURE_NAMES, extract_features(two_port, window_seconds=1.0)))["dest_port_entropy"]
+        many_port_entropy = dict(zip(FEATURE_NAMES, extract_features(many_port, window_seconds=1.0)))["dest_port_entropy"]
+        assert two_port_entropy == pytest.approx(1.0)
+        assert many_port_entropy > two_port_entropy * 3
 
     def test_packet_size_std_zero_for_uniform_sizes(self) -> None:
         packets = [make_tcp_packet(dport=80) for _ in range(5)]

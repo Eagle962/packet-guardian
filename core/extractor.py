@@ -55,21 +55,25 @@ def _is_icmpv6(packet: Any) -> bool:
     return any(issubclass(layer_cls, _ICMPv6) for layer_cls in packet.layers())
 
 
-def _shannon_entropy_normalized(counts: Sequence[int]) -> float:
-    """Normalized Shannon entropy (0..1) of a discrete distribution given
-    as raw counts.
+def _shannon_entropy(counts: Sequence[int]) -> float:
+    """Shannon entropy, in bits, of a discrete distribution given as raw
+    counts.
 
     0.0 means all mass on a single value (e.g. every packet went to the
     same destination port -- typical of a normal single-service session,
-    or a single-port flood); 1.0 means uniform across every distinct value
-    observed (typical of a port scan spreading evenly across many ports).
-    Normalizing by log2(k) (k = number of distinct values) makes the
-    measure comparable across windows with different numbers of distinct
-    ports, rather than raw entropy which grows with k regardless of shape.
+    or a single-port flood). Deliberately *not* normalized by log2(k): an
+    earlier version divided by log2(k) (k = number of distinct values) to
+    bound this to [0, 1], but that conflates "evenly split across 2
+    values" with "evenly split across 50 values" -- both normalize to
+    ~1.0, even though only the latter looks like a scan. Normal web
+    traffic realistically only ever uses 1-2 destination ports (80/443)
+    no matter how many sites are visited, and scored ~0.79-0.90 normalized
+    entropy under the old scheme -- indistinguishable from an actual port
+    scan's ~1.0. Raw entropy keeps that separation: 2 ports evenly split
+    caps at 1 bit, a 50-port scan reaches ~5.6 bits.
     """
     total = sum(counts)
-    k = len(counts)
-    if total == 0 or k <= 1:
+    if total == 0:
         return 0.0
 
     entropy = 0.0
@@ -79,8 +83,7 @@ def _shannon_entropy_normalized(counts: Sequence[int]) -> float:
         p = count / total
         entropy -= p * math.log2(p)
 
-    max_entropy = math.log2(k)
-    return entropy / max_entropy if max_entropy > 0 else 0.0
+    return entropy
 
 
 def extract_features(packets: Sequence[Any], window_seconds: float = 5.0) -> np.ndarray:
@@ -176,7 +179,7 @@ def extract_features(packets: Sequence[Any], window_seconds: float = 5.0) -> np.
     unique_destination_ip_count = len(dest_ips)
     unique_source_ip_count = len(src_ips)
 
-    dest_port_entropy = _shannon_entropy_normalized(list(dest_ports.values()))
+    dest_port_entropy = _shannon_entropy(list(dest_ports.values()))
 
     # ddof=0 (population std): we're describing this exact window, not
     # estimating a std for a larger population it was sampled from.

@@ -20,7 +20,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 import numpy as np
 from scapy.layers.inet import ICMP, IP, TCP, UDP
@@ -93,9 +93,9 @@ def profile_idle(rng: random.Random, window_seconds: float) -> List[Any]:
     return packets
 
 
-def profile_web_browsing(rng: random.Random, window_seconds: float) -> List[Any]:
+def profile_web_browsing(rng: random.Random, window_seconds: float, src: Optional[str] = None) -> List[Any]:
     """Bursty TCP to a handful of destinations, mixed request/response sizes."""
-    src = _rand_ip(rng)
+    src = src or _rand_ip(rng)
     dsts = [_rand_ip(rng, "93.184.") for _ in range(rng.randint(2, 5))]
     pps = rng.uniform(8, 35)
     count = max(1, int(pps * window_seconds))
@@ -127,9 +127,9 @@ def profile_video_streaming(rng: random.Random, window_seconds: float) -> List[A
     return packets
 
 
-def profile_bulk_file_transfer(rng: random.Random, window_seconds: float) -> List[Any]:
+def profile_bulk_file_transfer(rng: random.Random, window_seconds: float, src: Optional[str] = None) -> List[Any]:
     """Sustained large-packet TCP transfer to one or two destinations."""
-    src = _rand_ip(rng)
+    src = src or _rand_ip(rng)
     dsts = [_rand_ip(rng, "198.51.") for _ in range(rng.randint(1, 2))]
     port = rng.choice([443, 22, 80])
     pps = rng.uniform(50, 120)
@@ -144,9 +144,9 @@ def profile_bulk_file_transfer(rng: random.Random, window_seconds: float) -> Lis
     return packets
 
 
-def profile_dns_heavy(rng: random.Random, window_seconds: float) -> List[Any]:
+def profile_dns_heavy(rng: random.Random, window_seconds: float, src: Optional[str] = None) -> List[Any]:
     """Many small UDP queries to one or a few resolvers."""
-    src = _rand_ip(rng)
+    src = src or _rand_ip(rng)
     resolvers = [_rand_ip(rng, "8.8.") for _ in range(rng.randint(1, 3))]
     pps = rng.uniform(15, 45)
     count = max(1, int(pps * window_seconds))
@@ -178,12 +178,21 @@ def profile_voip_udp(rng: random.Random, window_seconds: float) -> List[Any]:
 
 def profile_mixed_office(rng: random.Random, window_seconds: float) -> List[Any]:
     """A blend of light web browsing, DNS, and a little bulk traffic --
-    representative of an ordinary workstation's background chatter."""
+    representative of an ordinary workstation's background chatter.
+
+    All sub-traffic shares a single source IP: it's one workstation doing
+    several things at once, not several different hosts. An earlier
+    version let each sub-profile pick its own random source IP, which
+    inflated unique_source_ip_count to 2-3 for a single-host window --
+    a real source of the false positives this profile once had (see
+    EVALUATION.md's iteration history).
+    """
+    src = _rand_ip(rng)
     packets = []
-    packets += profile_web_browsing(rng, window_seconds)
-    packets += profile_dns_heavy(rng, window_seconds)
+    packets += profile_web_browsing(rng, window_seconds, src=src)
+    packets += profile_dns_heavy(rng, window_seconds, src=src)
     if rng.random() < 0.4:
-        packets += profile_bulk_file_transfer(rng, window_seconds)
+        packets += profile_bulk_file_transfer(rng, window_seconds, src=src)
     return packets
 
 
