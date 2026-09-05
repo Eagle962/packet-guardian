@@ -317,3 +317,7 @@ from disk.
 - This tool is strictly **defensive/monitoring** software: it detects and
   reports anomalies, and includes no exploitation, malware, or unauthorized
   access capabilities.
+
+## License
+
+[MIT](LICENSE)
