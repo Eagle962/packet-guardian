@@ -71,7 +71,12 @@ class Dashboard:
         )
 
         ml_status = stats.get("ml_status", "NORMAL")
-        status_style = "bold red" if ml_status == "ANOMALY" else "bold green"
+        if ml_status == "ANOMALY":
+            status_style = "bold red"
+        elif ml_status in ("NO_TRAFFIC", "UNKNOWN"):
+            status_style = "dim"
+        else:
+            status_style = "bold green"
         table.add_row("ML Anomaly Score", f"{stats.get('anomaly_score', 0.0):.4f}")
         table.add_row("ML Status", Text(str(ml_status), style=status_style))
 
