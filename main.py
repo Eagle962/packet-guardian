@@ -18,7 +18,7 @@ from rich.live import Live
 from scapy.error import Scapy_Exception
 
 from core.extractor import FEATURE_NAMES, extract_features
-from core.rules import IcmpFloodRule, Ruleset, SynScanRule
+from core.rules import IcmpFloodRule, Ruleset, SlowSynScanRule, SynScanRule
 from core.sample_data import DEFAULT_SAMPLE_PATH, generate_sample_pcap
 from core.sniffer import capture_live, read_pcap
 from ml_engine.detector import ModelArtifact, load_model, predict
@@ -96,6 +96,10 @@ class Orchestrator:
         self.ruleset = Ruleset(
             [
                 SynScanRule(window_seconds=window_seconds),
+                # Runs independently of --window: it needs its own long
+                # detection window to catch scans slow enough to evade the
+                # fast rule above (see SlowSynScanRule's docstring).
+                SlowSynScanRule(),
                 IcmpFloodRule(window_seconds=window_seconds),
             ]
         )

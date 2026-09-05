@@ -217,6 +217,40 @@ class SynScanRule(BaseRule):
         return alerts
 
 
+class SlowSynScanRule(SynScanRule):
+    """Detects low-and-slow SYN scans that stay under SynScanRule's
+    threshold by spreading probes out over time (e.g. ~1 port/second).
+
+    SynScanRule's default 5s window with a 20-SYN threshold is blind to
+    this: a scan of 1 port/second never accumulates more than ~5 SYNs in
+    any 5s window, no matter how long it runs or how many ports it
+    eventually covers. This variant reuses the exact same detection logic
+    (it *is* a SynScanRule) with a much longer window and a threshold
+    tuned for that window, so a scan that spreads out over minutes still
+    eventually crosses it. It intentionally does not replace the fast
+    rule -- the two cover different attacker speeds and are meant to run
+    together.
+    """
+
+    name = "SLOW_SYN_SCAN"
+
+    def __init__(
+        self,
+        window_seconds: float = 300.0,
+        syn_threshold: int = 30,
+        unique_port_threshold: int = 30,
+        max_tracked_sources: int = DEFAULT_MAX_TRACKED_SOURCES,
+        sweep_interval: Optional[float] = None,
+    ) -> None:
+        super().__init__(
+            window_seconds=window_seconds,
+            syn_threshold=syn_threshold,
+            unique_port_threshold=unique_port_threshold,
+            max_tracked_sources=max_tracked_sources,
+            sweep_interval=sweep_interval,
+        )
+
+
 class IcmpFloodRule(BaseRule):
     """Detects ICMP flood behavior: many Echo Requests from one source.
 

@@ -97,7 +97,7 @@ class Dashboard:
             else:
                 time_str = str(timestamp)
 
-            if alert.get("rule_name") == "SYN_SCAN":
+            if "ports" in alert:
                 details = f"count={alert.get('count')} ports={len(alert.get('ports', []))}"
             else:
                 details = f"count={alert.get('count')}"
