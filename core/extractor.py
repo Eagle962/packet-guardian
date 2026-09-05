@@ -8,6 +8,7 @@ from typing import Any, List, Sequence
 
 import numpy as np
 from scapy.layers.inet import ICMP, IP, TCP, UDP
+from scapy.layers.inet6 import IPv6, _ICMPv6
 
 #: Canonical ordering of feature vector components. The ML training script
 #: and the detector must both honor this exact order.
@@ -21,6 +22,21 @@ FEATURE_NAMES: List[str] = [
     "unique_destination_port_count",
     "unique_destination_ip_count",
 ]
+
+
+def _is_icmpv6(packet: Any) -> bool:
+    """True if any layer of ``packet`` is an ICMPv6 message.
+
+    ``packet.haslayer(_ICMPv6)`` does *not* work here: Scapy's ``haslayer``
+    class matching does not walk the base-class hierarchy for this private
+    abstract base, so every concrete ICMPv6 message type (echo
+    request/reply, destination unreachable, neighbor discovery, ...) would
+    have to be enumerated and kept in sync by hand. Walking
+    ``packet.layers()`` and checking ``issubclass`` against the shared base
+    catches all of them uniformly, the same way ``haslayer(ICMP)`` does for
+    every ICMPv4 message type in one check.
+    """
+    return any(issubclass(layer_cls, _ICMPv6) for layer_cls in packet.layers())
 
 
 def extract_features(packets: Sequence[Any], window_seconds: float = 5.0) -> np.ndarray:
@@ -54,9 +70,10 @@ def extract_features(packets: Sequence[Any], window_seconds: float = 5.0) -> np.
         except Exception:
             pass
 
-        has_ip = packet.haslayer(IP)
-        if has_ip:
+        if packet.haslayer(IP):
             dest_ips.add(packet[IP].dst)
+        elif packet.haslayer(IPv6):
+            dest_ips.add(packet[IPv6].dst)
 
         if packet.haslayer(TCP):
             tcp_count += 1
@@ -64,7 +81,7 @@ def extract_features(packets: Sequence[Any], window_seconds: float = 5.0) -> np.
         elif packet.haslayer(UDP):
             udp_count += 1
             dest_ports.add(int(packet[UDP].dport))
-        elif packet.haslayer(ICMP):
+        elif packet.haslayer(ICMP) or _is_icmpv6(packet):
             icmp_count += 1
 
     average_packet_size = total_bytes / packet_count

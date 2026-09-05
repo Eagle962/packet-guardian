@@ -14,9 +14,20 @@ from collections import OrderedDict, defaultdict, deque
 from typing import Any, Deque, Dict, List, Optional
 
 from scapy.layers.inet import ICMP, IP, TCP
+from scapy.layers.inet6 import ICMPv6EchoRequest, IPv6
 
 
 Alert = Dict[str, Any]
+
+
+def _source_address(packet: Any) -> Optional[str]:
+    """Return the packet's source address from whichever of IP/IPv6 is
+    present, or None if neither layer is present."""
+    if packet.haslayer(IP):
+        return packet[IP].src
+    if packet.haslayer(IPv6):
+        return packet[IPv6].src
+    return None
 
 #: Default cap on the number of distinct source IPs a rule will track at
 #: once. Without a cap, a spoofed-source flood (packets from thousands of
@@ -152,7 +163,11 @@ class SynScanRule(BaseRule):
     def process_packet(self, packet: Any, timestamp: Optional[float] = None) -> List[Alert]:
         alerts: List[Alert] = []
 
-        if not packet.haslayer(IP) or not packet.haslayer(TCP):
+        # TCP-over-IPv6 nests the same TCP layer scapy uses for IPv4, so a
+        # scan conducted entirely over IPv6 is only missed if we insist on
+        # an IPv4 IP layer specifically -- accept either.
+        src_ip = _source_address(packet)
+        if src_ip is None or not packet.haslayer(TCP):
             return alerts
 
         tcp_layer = packet[TCP]
@@ -166,7 +181,6 @@ class SynScanRule(BaseRule):
             return alerts
 
         now = self._now(timestamp)
-        src_ip = packet[IP].src
         dst_port = int(tcp_layer.dport)
 
         self._touch_source(src_ip, now, [self._events, self._alerted_until])
@@ -204,7 +218,13 @@ class SynScanRule(BaseRule):
 
 
 class IcmpFloodRule(BaseRule):
-    """Detects ICMP flood behavior: many Echo Requests from one source."""
+    """Detects ICMP flood behavior: many Echo Requests from one source.
+
+    Covers both ICMPv4 Echo Request (type 8) and ICMPv6 Echo Request
+    (``ICMPv6EchoRequest``, type 128) -- these are entirely distinct Scapy
+    layer classes, not the same class carried over a different IP version,
+    so both must be checked explicitly.
+    """
 
     name = "ICMP_FLOOD"
 
@@ -228,16 +248,17 @@ class IcmpFloodRule(BaseRule):
     def process_packet(self, packet: Any, timestamp: Optional[float] = None) -> List[Alert]:
         alerts: List[Alert] = []
 
-        if not packet.haslayer(IP) or not packet.haslayer(ICMP):
+        is_icmpv4_echo_request = packet.haslayer(IP) and packet.haslayer(ICMP) and int(packet[ICMP].type) == 8
+        is_icmpv6_echo_request = packet.haslayer(IPv6) and packet.haslayer(ICMPv6EchoRequest)
+
+        if not (is_icmpv4_echo_request or is_icmpv6_echo_request):
             return alerts
 
-        icmp_layer = packet[ICMP]
-        # ICMP type 8 == Echo Request.
-        if int(icmp_layer.type) != 8:
+        src_ip = _source_address(packet)
+        if src_ip is None:
             return alerts
 
         now = self._now(timestamp)
-        src_ip = packet[IP].src
 
         self._touch_source(src_ip, now, [self._events, self._alerted_until])
 
