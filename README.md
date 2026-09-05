@@ -16,10 +16,13 @@ malware, or unauthorized-access functionality.
 - **BPF filtering** — restrict traffic with standard Berkeley Packet Filter
   expressions.
 - **Rule engine** — extensible `BaseRule` / `Ruleset` architecture with
-  built-in `SynScanRule` and `IcmpFloodRule` detectors, fully configurable
-  thresholds and time windows.
-- **ML anomaly detection** — packets are summarized into an 8-feature vector
-  per time window and scored by a trained `IsolationForest` model.
+  built-in `SynScanRule` (fast scans), `SlowSynScanRule` (low-and-slow
+  scans), and `IcmpFloodRule` detectors, fully configurable thresholds and
+  time windows, covering both IPv4 and IPv6 traffic. See **Detection
+  Limits** below for what these rules do *not* catch.
+- **ML anomaly detection** — packets are summarized into a fixed feature
+  vector (`core.extractor.FEATURE_NAMES`) per time window and scored by a
+  trained model.
 - **Live TUI dashboard** — split-screen view of traffic/ML stats (top) and
   rule engine alerts (bottom), rendered with Rich.
 - **Automatic offline fallback** — if live capture fails (e.g. missing
@@ -142,6 +145,47 @@ python -m ml_engine.train
 This generates synthetic "normal traffic" feature vectors, fits a
 `IsolationForest(random_state=42)`, and writes the model plus feature
 metadata (names, count, ordering) to `ml_engine/model.pkl`.
+
+## Detection Limits
+
+The built-in rules cover a specific, narrow set of behaviors. Do not read
+their presence as general scan/flood coverage -- each one has real, known
+blind spots:
+
+- **`SynScanRule` / `SlowSynScanRule` only look at pure SYN packets** (SYN
+  set, ACK clear). They do **not** detect:
+  - **FIN, NULL, or Xmas scans** (probes with FIN/no flags/FIN+PSH+URG set)
+    -- a classic technique for evading exactly this kind of SYN-counting
+    rule.
+  - **ACK scans** (used for firewall/stateful-filter mapping, not open-port
+    discovery) -- these carry the ACK flag and are explicitly excluded by
+    design (to avoid flagging normal handshake traffic), which also means
+    a real ACK scan passes through unnoticed.
+  - **UDP port scans** -- there is no UDP-scan rule at all. A UDP sweep
+    across many ports produces no alert from either rule.
+  - **Distributed / low-and-slow-per-source scans**: both rules key
+    entirely on a single source IP. A scan spread across many source IPs
+    (a botnet each probing a handful of ports) never crosses either rule's
+    per-source threshold, no matter how coordinated or effective the
+    overall scan is.
+  - `SlowSynScanRule`'s 300s window still has a floor: a scan slower than
+    roughly `unique_port_threshold` ports per 300s (e.g. one port every
+    10+ seconds) will still evade it. Raising the window further trades
+    detection latency and memory for coverage of even slower scans.
+- **`IcmpFloodRule` only looks at ICMP/ICMPv6 Echo Request.** It does not
+  detect floods using other ICMP types, non-ICMP floods (UDP floods, TCP
+  SYN floods to a single port/service rather than spread across ports),
+  or application-layer denial-of-service patterns.
+- **All rules are per-source-IP and stateless across restarts.** Spoofed
+  source addresses can dilute a real scan below threshold by spreading
+  probes across many forged IPs (see the bounded-state fix above -- this
+  keeps the *monitor* from running out of memory, it does not make a
+  spoofed-source scan detectable). State does not persist between runs of
+  packet-guardian.
+
+If your threat model includes any of the above, treat the rule engine as
+one signal among several (alongside the ML detector and your own
+monitoring), not a complete scan/flood detector.
 
 ## Writing a Custom Rule
 
