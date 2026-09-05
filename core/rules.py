@@ -10,13 +10,21 @@ from __future__ import annotations
 
 import time
 from abc import ABC, abstractmethod
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 from typing import Any, Deque, Dict, List, Optional
 
 from scapy.layers.inet import ICMP, IP, TCP
 
 
 Alert = Dict[str, Any]
+
+#: Default cap on the number of distinct source IPs a rule will track at
+#: once. Without a cap, a spoofed-source flood (packets from thousands of
+#: forged IPs, each seen once) grows a rule's per-source state forever,
+#: since a source's own deque is only ever pruned when that same source
+#: sends another packet -- this is a memory-exhaustion vector against the
+#: monitor itself.
+DEFAULT_MAX_TRACKED_SOURCES = 10_000
 
 
 class BaseRule(ABC):
@@ -25,13 +33,33 @@ class BaseRule(ABC):
     Subclasses must implement :meth:`process_packet`, which is called once
     per packet and should return a list of alerts (usually empty) triggered
     by that packet's arrival.
+
+    Provides bounded, TTL-based tracking of per-source-IP state via
+    :meth:`_touch_source`, so subclasses don't each have to reimplement
+    memory-bounding logic.
     """
 
     #: Human readable name reported in alerts. Subclasses should override.
     name: str = "base_rule"
 
-    def __init__(self, window_seconds: float = 5.0) -> None:
+    def __init__(
+        self,
+        window_seconds: float = 5.0,
+        max_tracked_sources: int = DEFAULT_MAX_TRACKED_SOURCES,
+        sweep_interval: Optional[float] = None,
+    ) -> None:
         self.window_seconds = window_seconds
+        self.max_tracked_sources = max_tracked_sources
+        # How often (in the same time units as packet timestamps) to sweep
+        # for sources that have gone quiet. Defaults to the detection
+        # window itself: any source silent for longer than window_seconds
+        # can no longer contribute to a still-open detection window, so its
+        # state is safe to drop.
+        self.sweep_interval = window_seconds if sweep_interval is None else sweep_interval
+        # source_ip -> last time it was seen, in insertion/access order so
+        # the least-recently-touched source is always at the front (LRU).
+        self._last_seen: "OrderedDict[str, float]" = OrderedDict()
+        self._last_sweep_at: Optional[float] = None
 
     @abstractmethod
     def process_packet(self, packet: Any, timestamp: Optional[float] = None) -> List[Alert]:
@@ -39,10 +67,53 @@ class BaseRule(ABC):
         raise NotImplementedError
 
     def reset(self) -> None:
-        """Clear any accumulated state. Subclasses may override."""
+        """Clear any accumulated state. Subclasses should call super()."""
+        self._last_seen.clear()
+        self._last_sweep_at = None
 
     def _now(self, timestamp: Optional[float]) -> float:
         return timestamp if timestamp is not None else time.time()
+
+    def _touch_source(self, src_ip: str, now: float, tracked_dicts: List[Dict[str, Any]]) -> None:
+        """Record that ``src_ip`` was active at ``now``, and bound the total
+        memory used to track sources via two mechanisms:
+
+        1. A periodic TTL sweep (every ``sweep_interval``): any source not
+           seen for longer than ``window_seconds`` is dropped, since it can
+           no longer affect a sliding window of that size. This is the
+           primary defense -- it reclaims state from sources that simply
+           stop sending, which per-packet pruning of a single source's own
+           deque can never do on its own.
+        2. An LRU cap at ``max_tracked_sources``: a hard ceiling on worst
+           case memory even if a flood arrives faster than the sweep
+           interval, evicting the least-recently-active source first.
+
+        ``tracked_dicts`` are the calling rule's own per-source dicts (e.g.
+        its event deque and last-alert-time maps) which must be evicted in
+        lockstep with ``_last_seen`` so a dropped source's state doesn't
+        outlive its eviction here.
+        """
+        self._last_seen[src_ip] = now
+        self._last_seen.move_to_end(src_ip)
+
+        if self._last_sweep_at is None:
+            self._last_sweep_at = now
+        elif now - self._last_sweep_at >= self.sweep_interval:
+            self._last_sweep_at = now
+            stale_ips = [
+                ip
+                for ip, last_seen in self._last_seen.items()
+                if now - last_seen > self.window_seconds
+            ]
+            for ip in stale_ips:
+                del self._last_seen[ip]
+                for tracked in tracked_dicts:
+                    tracked.pop(ip, None)
+
+        while len(self._last_seen) > self.max_tracked_sources:
+            oldest_ip, _ = self._last_seen.popitem(last=False)
+            for tracked in tracked_dicts:
+                tracked.pop(oldest_ip, None)
 
 
 class SynScanRule(BaseRule):
@@ -61,8 +132,10 @@ class SynScanRule(BaseRule):
         window_seconds: float = 5.0,
         syn_threshold: int = 20,
         unique_port_threshold: int = 10,
+        max_tracked_sources: int = DEFAULT_MAX_TRACKED_SOURCES,
+        sweep_interval: Optional[float] = None,
     ) -> None:
-        super().__init__(window_seconds)
+        super().__init__(window_seconds, max_tracked_sources, sweep_interval)
         self.syn_threshold = syn_threshold
         self.unique_port_threshold = unique_port_threshold
         # source_ip -> deque of (timestamp, dest_port)
@@ -72,6 +145,7 @@ class SynScanRule(BaseRule):
         self._alerted_until: Dict[str, float] = {}
 
     def reset(self) -> None:
+        super().reset()
         self._events.clear()
         self._alerted_until.clear()
 
@@ -94,6 +168,8 @@ class SynScanRule(BaseRule):
         now = self._now(timestamp)
         src_ip = packet[IP].src
         dst_port = int(tcp_layer.dport)
+
+        self._touch_source(src_ip, now, [self._events, self._alerted_until])
 
         events = self._events[src_ip]
         events.append((now, dst_port))
@@ -136,13 +212,16 @@ class IcmpFloodRule(BaseRule):
         self,
         window_seconds: float = 5.0,
         echo_request_threshold: int = 100,
+        max_tracked_sources: int = DEFAULT_MAX_TRACKED_SOURCES,
+        sweep_interval: Optional[float] = None,
     ) -> None:
-        super().__init__(window_seconds)
+        super().__init__(window_seconds, max_tracked_sources, sweep_interval)
         self.echo_request_threshold = echo_request_threshold
         self._events: Dict[str, Deque] = defaultdict(deque)
         self._alerted_until: Dict[str, float] = {}
 
     def reset(self) -> None:
+        super().reset()
         self._events.clear()
         self._alerted_until.clear()
 
@@ -159,6 +238,8 @@ class IcmpFloodRule(BaseRule):
 
         now = self._now(timestamp)
         src_ip = packet[IP].src
+
+        self._touch_source(src_ip, now, [self._events, self._alerted_until])
 
         events = self._events[src_ip]
         events.append(now)
