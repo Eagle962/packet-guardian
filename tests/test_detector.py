@@ -1,45 +1,49 @@
 """Tests for ml_engine.detector: load_model and predict."""
 
-import pickle
-
+import joblib
 import numpy as np
 import pytest
 from sklearn.ensemble import IsolationForest
 
 from core.extractor import FEATURE_NAMES
-from ml_engine.detector import load_model, predict
-from ml_engine.train import MODEL_PATH, generate_normal_traffic_samples, train_model
+from ml_engine.detector import EXPECTED_SCHEMA_VERSION, load_model, predict
+from ml_engine.train import MODEL_PATH, build_pipeline
 
-#: core/extractor.py's FEATURE_NAMES gained `other_ratio` (see Phase 2 task
-#: 2.4 / the ARP-traffic-vanishes fix), but ml_engine/train.py still
-#: fabricates 8-column feature vectors by hand instead of going through
-#: extract_features() -- fixing that properly means generating labelled
-#: packet data and retraining honestly, which is Phase 3's job (the
-#: primary deliverable), not a one-line patch here. Until Phase 3 lands,
-#: the checked-in model.pkl and train.py's synthetic generator are known
-#: stale/incompatible with the current schema; load_model() correctly
-#: rejects the mismatch (see test_mismatched_feature_names_raises) and
-#: main.py already falls back to rule-only detection when that happens.
-#: These tests are skipped rather than silently patched to avoid doing
-#: throwaway work on code Phase 3 replaces outright.
-MODEL_QUALITY_PENDING_PHASE_3 = "model.pkl predates the other_ratio feature; retrained honestly in Phase 3"
+
+def _make_artifact(estimator=None, feature_names=None, feature_count=None, schema_version=None, sklearn_version=None):
+    n_features = len(FEATURE_NAMES)
+    if estimator is None:
+        estimator = IsolationForest(n_estimators=10, random_state=0)
+    pipeline = build_pipeline(estimator)
+    rng = np.random.default_rng(0)
+    pipeline.fit(rng.normal(size=(50, n_features)))
+
+    import sklearn as sklearn_module
+
+    return {
+        "model": pipeline,
+        "feature_names": list(FEATURE_NAMES) if feature_names is None else feature_names,
+        "feature_count": n_features if feature_count is None else feature_count,
+        "schema_version": EXPECTED_SCHEMA_VERSION if schema_version is None else schema_version,
+        "sklearn_version": sklearn_module.__version__ if sklearn_version is None else sklearn_version,
+    }
 
 
 class TestLoadModel:
-    @pytest.mark.skip(reason=MODEL_QUALITY_PENDING_PHASE_3)
-    def test_load_real_trained_model(self) -> None:
+    def test_load_real_shipped_model(self) -> None:
+        """The checked-in model.pkl (trained via `python -m ml_engine.train`)
+        must load cleanly against the current schema -- if this fails, the
+        model needs retraining, which main.py already handles gracefully
+        (falls back to rule-only detection with a warning), but it should
+        not happen for a freshly-committed model."""
         artifact = load_model(MODEL_PATH)
         assert artifact["feature_names"] == list(FEATURE_NAMES)
         assert artifact["feature_count"] == len(FEATURE_NAMES)
-        assert isinstance(artifact["model"], IsolationForest)
-
-    def test_stale_shipped_model_is_correctly_rejected(self) -> None:
-        """The checked-in model.pkl predates other_ratio; load_model()'s
-        schema check must catch this rather than silently loading a model
-        whose features no longer line up with what extract_features()
-        produces."""
-        with pytest.raises(ValueError):
-            load_model(MODEL_PATH)
+        assert artifact["schema_version"] == EXPECTED_SCHEMA_VERSION
+        assert "sklearn_version" in artifact
+        assert "model_family" in artifact
+        assert hasattr(artifact["model"], "predict")
+        assert hasattr(artifact["model"], "decision_function")
 
     def test_missing_file_raises(self, tmp_path) -> None:
         missing_path = tmp_path / "does_not_exist.pkl"
@@ -48,45 +52,36 @@ class TestLoadModel:
 
     def test_mismatched_feature_names_raises(self, tmp_path) -> None:
         bad_path = tmp_path / "bad_model.pkl"
-        model = train_model(generate_normal_traffic_samples())
-        with open(bad_path, "wb") as handle:
-            pickle.dump(
-                {
-                    "model": model,
-                    "feature_names": ["wrong", "feature", "list"],
-                    "feature_count": 3,
-                },
-                handle,
-            )
+        joblib.dump(_make_artifact(feature_names=["wrong", "feature", "list"], feature_count=3), bad_path)
         with pytest.raises(ValueError):
             load_model(bad_path)
 
     def test_missing_metadata_key_raises(self, tmp_path) -> None:
         bad_path = tmp_path / "incomplete_model.pkl"
-        model = train_model(generate_normal_traffic_samples())
-        with open(bad_path, "wb") as handle:
-            pickle.dump({"model": model}, handle)
+        joblib.dump({"model": _make_artifact()["model"]}, bad_path)
         with pytest.raises(ValueError):
             load_model(bad_path)
 
+    def test_schema_version_mismatch_raises(self, tmp_path) -> None:
+        bad_path = tmp_path / "old_schema_model.pkl"
+        joblib.dump(_make_artifact(schema_version=EXPECTED_SCHEMA_VERSION - 1), bad_path)
+        with pytest.raises(ValueError):
+            load_model(bad_path)
+
+    def test_sklearn_version_mismatch_warns_but_still_loads(self, tmp_path) -> None:
+        warn_path = tmp_path / "old_sklearn_model.pkl"
+        joblib.dump(_make_artifact(sklearn_version="0.0.0-not-a-real-version"), warn_path)
+        with pytest.warns(UserWarning, match="scikit-learn"):
+            artifact = load_model(warn_path)
+        assert artifact["feature_names"] == list(FEATURE_NAMES)
+
 
 class TestPredict:
-    """predict()'s own mechanics (shape handling, key names) are exercised
-    against a small model trained on the *current* feature dimensionality
-    on the fly, rather than the stale shipped model.pkl -- these tests
-    are about the detector plumbing, not the model's quality (that's
-    Phase 3's ml_quality gate)."""
-
-    @staticmethod
-    def _fresh_artifact():
-        n_features = len(FEATURE_NAMES)
-        rng = np.random.default_rng(0)
-        training_data = rng.normal(size=(200, n_features))
-        model = train_model(training_data)
-        return {"model": model, "feature_names": list(FEATURE_NAMES), "feature_count": n_features}
+    """predict()'s own mechanics (shape handling, key names) -- not the
+    shipped model's quality, which is tests/test_ml_quality.py's job."""
 
     def test_predict_returns_expected_keys(self) -> None:
-        artifact = self._fresh_artifact()
+        artifact = _make_artifact()
         vector = np.zeros(len(FEATURE_NAMES))
         result = predict(vector, artifact)
         assert "anomaly_score" in result
@@ -95,8 +90,14 @@ class TestPredict:
         assert result["status"] in ("NORMAL", "ANOMALY")
 
     def test_predict_accepts_zero_vector(self) -> None:
-        artifact = self._fresh_artifact()
+        artifact = _make_artifact()
         vector = np.zeros(len(FEATURE_NAMES))
         result = predict(vector, artifact)
         assert "anomaly_score" in result
+        assert result["status"] in ("NORMAL", "ANOMALY")
+
+    def test_predict_works_against_real_shipped_model(self) -> None:
+        artifact = load_model(MODEL_PATH)
+        vector = np.zeros(len(FEATURE_NAMES))
+        result = predict(vector, artifact)
         assert result["status"] in ("NORMAL", "ANOMALY")

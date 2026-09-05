@@ -78,7 +78,12 @@ class Dashboard:
             status_style = "dim"
         else:
             status_style = "bold green"
-        table.add_row("ML Anomaly Score", f"{stats.get('anomaly_score', 0.0):.4f}")
+        # `:.4g` rather than a fixed `:.4f`: some model families (e.g.
+        # LocalOutlierFactor) can produce scores with a very wide dynamic
+        # range (a "clearly anomalous" window's ratio-based score isn't
+        # bounded the way e.g. IsolationForest's is), and `.4f` would
+        # render those as an unreadable wall of digits.
+        table.add_row("ML Anomaly Score", f"{stats.get('anomaly_score', 0.0):.4g}")
         table.add_row("ML Status", Text(str(ml_status), style=status_style))
 
         return Panel(table, title="Traffic / ML Stats", border_style="cyan")

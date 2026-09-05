@@ -2,8 +2,8 @@
 
 A modular, defensive network traffic anomaly detection tool. It combines a
 configurable **rule-based engine** (SYN scan / ICMP flood detection) with an
-**unsupervised ML detector** (IsolationForest) and renders everything live in
-a terminal dashboard built with [Rich](https://github.com/Textualize/rich).
+**unsupervised ML detector** and renders everything live in a terminal
+dashboard built with [Rich](https://github.com/Textualize/rich).
 
 packet-guardian is a monitoring tool only: it observes traffic you are
 authorized to inspect and reports on it. It contains no exploitation,
@@ -41,20 +41,22 @@ malware, or unauthorized-access functionality.
                                   ▼
                          ┌─────────────────┐
                          │   core/rules     │
-                         │  Ruleset         │──► alerts (SYN_SCAN, ICMP_FLOOD)
-                         │  BaseRule impls  │
+                         │  Ruleset         │──► alerts (SYN_SCAN,
+                         │  BaseRule impls  │    SLOW_SYN_SCAN, ICMP_FLOOD)
                          └────────┬─────────┘
                                   │ packet stream (windowed)
                                   ▼
                          ┌─────────────────┐
                          │  core/extractor  │
-                         │ extract_features │──► 8-dim feature vector
+                         │ extract_features │──► FEATURE_NAMES vector
                          └────────┬─────────┘
                                   ▼
                          ┌─────────────────┐
                          │ ml_engine/       │
                          │  detector.py     │──► anomaly_score, status
-                         │  (model.pkl)     │
+                         │  (model.pkl,     │
+                         │   generated --   │
+                         │   not tracked)   │
                          └────────┬─────────┘
                                   │
                                   ▼
@@ -71,24 +73,37 @@ malware, or unauthorized-access functionality.
 ```
 packet-guardian/
 ├── core/
-│   ├── sniffer.py     # Scapy capture/replay wrapper (live + pcap)
-│   ├── extractor.py   # packet window -> fixed feature vector
-│   ├── rules.py        # BaseRule / Ruleset / SynScanRule / IcmpFloodRule
-│   └── sample_data.py  # synthetic sample.pcap generator (offline fallback)
+│   ├── sniffer.py       # Scapy capture/replay wrapper (live + pcap) -- the
+│   │                    #   only module that imports Scapy's capture APIs
+│   ├── extractor.py     # packet window -> FEATURE_NAMES vector
+│   ├── rules.py         # BaseRule / Ruleset / SynScanRule / SlowSynScanRule
+│   │                    #   / IcmpFloodRule (IPv4 + IPv6)
+│   └── sample_data.py   # synthetic sample.pcap generator (offline fallback)
 ├── ml_engine/
-│   ├── train.py        # synthetic training data + IsolationForest training
-│   ├── detector.py     # load_model() / predict()
-│   └── model.pkl        # trained model + feature metadata (generated)
+│   ├── traffic_profiles.py  # labelled synthetic traffic generator (packets,
+│   │                        #   not hand-written feature vectors)
+│   ├── preprocessing.py # shared log1p column transform (train + serve)
+│   ├── train.py         # hyperparameter/model-family search + training
+│   ├── evaluate.py      # held-out evaluation -> EVALUATION.md
+│   ├── detector.py      # load_model() / predict()
+│   └── model.pkl        # trained pipeline + metadata (generated, gitignored)
 ├── ui/
 │   └── console.py       # Rich dashboard (rendering only)
 ├── data/
 │   └── sample.pcap      # synthetic capture: normal + SYN scan + ICMP flood
 ├── tests/
 │   ├── test_rules.py
+│   ├── test_rules_bounded_state.py
+│   ├── test_slow_scan.py
+│   ├── test_ipv6.py
 │   ├── test_extractor.py
-│   └── test_detector.py
+│   ├── test_orchestrator.py
+│   ├── test_traffic_profiles.py
+│   ├── test_detector.py
+│   └── test_ml_quality.py   # hard ML quality gates (see EVALUATION.md)
 ├── main.py               # CLI orchestrator
 ├── requirements.txt
+├── EVALUATION.md         # ML detector evaluation report (generated)
 └── README.md
 ```
 
@@ -135,16 +150,36 @@ python main.py --interface en0 --timeout 30           # capture for 30s
 
 ## Model Training
 
-The repository ships with a pre-trained `ml_engine/model.pkl`. To regenerate
-it (e.g. after changing `FEATURE_NAMES` or the synthetic data distribution):
+`ml_engine/model.pkl` is **not** checked into version control (see
+Security & Privacy below) -- generate it locally before running live/PCAP
+mode with ML detection enabled:
 
 ```bash
 python -m ml_engine.train
 ```
 
-This generates synthetic "normal traffic" feature vectors, fits a
-`IsolationForest(random_state=42)`, and writes the model plus feature
-metadata (names, count, ordering) to `ml_engine/model.pkl`.
+This generates labelled synthetic traffic (`ml_engine/traffic_profiles.py`),
+searches hyperparameters across three candidate model families
+(`IsolationForest`, `OneClassSVM`, `LocalOutlierFactor`) on a validation
+split, and saves the winning pipeline (log1p + `RobustScaler` +
+model) plus feature/version/provenance metadata to `ml_engine/model.pkl`
+via `joblib`. If no model is present (or it fails its schema check),
+`main.py` prints a warning and falls back to rule-only detection rather
+than crashing.
+
+To see how well the currently-trained model actually performs, and
+against what data:
+
+```bash
+python -m ml_engine.evaluate
+```
+
+This scores the model against a held-out labelled set (a seed never used
+during training or hyperparameter selection) and (re)writes
+[`EVALUATION.md`](EVALUATION.md) with the real numbers -- dataset
+provenance, per-scenario precision/recall/FPR, ROC-AUC, and a confusion
+matrix. `tests/test_ml_quality.py` enforces hard minimum-quality gates
+against those same numbers.
 
 ## Detection Limits
 
@@ -267,11 +302,18 @@ from disk.
   can expose sensitive data (credentials, personal information) traversing
   the network. Do not run `--interface` mode against networks or hosts you
   do not own or have explicit permission to monitor.
-- **Untrusted pickle files are a code-execution risk.** `ml_engine/model.pkl`
-  is loaded with Python's `pickle` module, which can execute arbitrary code
-  if the file has been tampered with. Only load model files you trained
-  yourself or obtained from a trusted source — never load a `.pkl` file
-  from an untrusted or unauthenticated origin.
+- **Untrusted model files are a code-execution risk.** `ml_engine/model.pkl`
+  is loaded with `joblib.load()`, which (like the `pickle` module it uses
+  internally for non-array objects) can execute arbitrary code if the file
+  has been tampered with. Switching from bare `pickle` to `joblib` changes
+  how the array data inside the artifact is stored -- it does **not**
+  change this risk. Only load model files you trained yourself (`python -m
+  ml_engine.train`) or obtained from a source you trust as much as you'd
+  trust running its code directly — never load a `.pkl` file from an
+  untrusted or unauthenticated origin. The model is intentionally not
+  checked into version control (see Model Training above); generate it
+  locally instead of fetching a prebuilt one from anywhere you can't
+  verify.
 - This tool is strictly **defensive/monitoring** software: it detects and
   reports anomalies, and includes no exploitation, malware, or unauthorized
   access capabilities.
