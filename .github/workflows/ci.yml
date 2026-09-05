@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Type check (mypy)
+        run: mypy core ui ml_engine main.py
+
+      - name: Compile check
+        run: python -m compileall .
+
+      # model.pkl is gitignored (see README's Security & Privacy section on
+      # why a trained model artifact isn't checked into version control) --
+      # train it fresh so both the quality-gate tests and the end-to-end
+      # run below have a model to exercise.
+      - name: Train ML model
+        run: python -m ml_engine.train
+
+      # Includes tests/test_ml_quality.py -- the hard ML quality gates from
+      # EVALUATION.md (FPR/recall/ROC-AUC/ranking-sanity/determinism).
+      - name: Test suite with coverage
+        run: pytest --cov=core --cov=ml_engine --cov=ui --cov=main --cov-report=term-missing -q
+
+      - name: End-to-end PCAP run
+        run: python main.py --pcap data/sample.pcap
